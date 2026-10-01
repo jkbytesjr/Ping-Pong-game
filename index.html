@@ -1,0 +1,1059 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ping Pong</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oxanium:wght@500;700&family=IBM+Plex+Sans:wght@400;600&display=swap">
+<style>
+  /* Layout: one centered column, court canvas on top, a slim control strip below. Single dark "arcade cabinet" look by choice. */
+  :root {
+    --bg: #0c1220;          /* room around the cabinet */
+    --court: #111b2e;       /* playing surface */
+    --line: #2a3a58;        /* court markings */
+    --ink: #e8edf6;         /* text */
+    --muted: #8796b3;       /* secondary text */
+    --player: #4da3ff;      /* left paddle, blue */
+    --cpu: #ff5a5f;         /* right paddle, red */
+    --ball: #ffb627;        /* ball, amber */
+    --font-display: "Oxanium", "Trebuchet MS", system-ui, sans-serif;
+    --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    color-scheme: dark;
+  }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 14px/1.5 var(--font-body);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    padding-inline: 16px;
+    padding-block: 16px;
+    box-sizing: border-box;
+  }
+  #game {
+    display: block;
+    width: 100%;
+    max-width: 800px;
+    aspect-ratio: 8 / 5;
+    background: var(--court);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    touch-action: none;
+    cursor: none;
+  }
+  .controls, .panel, .help { width: 100%; max-width: 800px; box-sizing: border-box; }
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .group { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .label {
+    color: var(--muted);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-right: 4px;
+  }
+  button {
+    font: 600 13px var(--font-body);
+    color: var(--ink);
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 6px 12px;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--muted); }
+  button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--ball); outline-offset: 2px; }
+  button[aria-pressed="true"] { border-color: var(--ball); color: var(--ball); }
+  kbd {
+    font: 500 11px var(--font-display);
+    color: var(--muted);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: 0 4px;
+    margin-left: 6px;
+  }
+  .panel {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .panel p { margin: 0; }
+  .stack { display: flex; flex-direction: column; gap: 8px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .code {
+    font: 700 28px var(--font-display);
+    letter-spacing: 0.2em;
+    color: var(--ball);
+  }
+  input, textarea {
+    font: 500 14px var(--font-body);
+    color: var(--ink);
+    background: var(--court);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 6px 8px;
+    box-sizing: border-box;
+  }
+  #room-code-input { width: 7em; text-transform: uppercase; letter-spacing: 0.15em; font-family: var(--font-display); }
+  textarea { width: 100%; min-width: 0; height: 64px; resize: vertical; font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace; word-break: break-all; }
+  #net-status { color: var(--muted); }
+  .invite { color: var(--muted); font-size: 12px; user-select: all; overflow-wrap: anywhere; min-width: 0; }
+  .help { color: var(--muted); font-size: 12px; margin: 0; }
+</style>
+</head>
+<body>
+<canvas id="game" width="800" height="500" aria-label="Pong court"></canvas>
+
+<div class="controls">
+  <div class="group">
+    <button id="btn-start" type="button">Start<kbd>Space</kbd></button>
+    <button id="btn-restart" type="button">Restart<kbd>R</kbd></button>
+  </div>
+  <div class="group" role="group" aria-label="Game mode">
+    <span class="label">Mode</span>
+    <button id="mode-cpu" type="button">vs CPU</button>
+    <button id="mode-local" type="button">2 Players</button>
+    <button id="mode-online" type="button">Online</button>
+  </div>
+  <div class="group" id="difficulty" role="group" aria-label="Difficulty">
+    <span class="label">CPU</span>
+    <button id="btn-d1" type="button">Easy<kbd>1</kbd></button>
+    <button id="btn-d2" type="button">Medium<kbd>2</kbd></button>
+    <button id="btn-d3" type="button">Hard<kbd>3</kbd></button>
+  </div>
+</div>
+
+<section class="panel" id="online" hidden aria-label="Online game">
+  <div class="row" id="net-choose">
+    <button id="net-host" type="button">Host a game</button>
+    <button id="net-join" type="button">Join a game</button>
+  </div>
+
+  <!-- Inside Claude: players meet in a shared room by a short code -->
+  <div class="row" id="room-host" hidden>
+    <span>Your game code</span>
+    <span class="code" id="room-code"></span>
+    <button id="room-copy" type="button">Copy invite link</button>
+    <span class="invite" id="room-link"></span>
+  </div>
+  <div class="row" id="room-join" hidden>
+    <label for="room-code-input">Game code</label>
+    <input id="room-code-input" maxlength="6" autocomplete="off" spellcheck="false">
+    <button id="room-join-go" type="button">Join</button>
+  </div>
+
+  <!-- Standalone file: players swap connection codes by copy and paste (WebRTC) -->
+  <div class="stack" id="rtc" hidden>
+    <div class="stack">
+      <label for="rtc-in" id="rtc-in-label"></label>
+      <textarea id="rtc-in" spellcheck="false"></textarea>
+      <div class="row"><button id="rtc-in-go" type="button"></button></div>
+    </div>
+    <div class="stack">
+      <label for="rtc-out" id="rtc-out-label"></label>
+      <textarea id="rtc-out" readonly></textarea>
+      <div class="row"><button id="rtc-copy" type="button">Copy code</button></div>
+    </div>
+  </div>
+
+  <p id="net-status" aria-live="polite"></p>
+  <div class="row"><button id="net-leave" type="button">Leave online game</button></div>
+</section>
+
+<p class="help" id="help"></p>
+
+<script>
+(() => {
+  "use strict";
+
+  // ---------- Constants ----------
+  const W = 800, H = 500;
+  const PADDLE_W = 12, PADDLE_H = 90, PADDLE_MARGIN = 24;
+  const BALL_R = 8;
+  const WIN_SCORE = 7;
+  // Speeds are in pixels per frame at 60 fps; update() scales them by real elapsed time.
+  const BALL_START_SPEED = 6;
+  const BALL_SPEEDUP = 0.5;
+  const BALL_MAX_SPEED = 14;
+  const MAX_BOUNCE_ANGLE = Math.PI / 4;   // 45 degrees
+  const PLAYER_SPEED = 8;
+  const SERVE_DELAY = 0.8;                // seconds between a point and the next serve
+  const NET_SEND_INTERVAL = 33;           // ms between online updates (about 30 per second)
+  // This game's address on claude.ai. An invite link adds "#pong-CODE" so the friend joins in one click.
+  const SHARE_URL = "https://claude.ai/artifact/VuuxeLCEXRwzYxnfv5WV6q";
+  const STUN_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
+  const DIFFICULTY = {
+    1: { name: "Easy",   cpuSpeed: 3.2, aimError: 40, reactX: 0.55 },
+    2: { name: "Medium", cpuSpeed: 4.6, aimError: 26, reactX: 0.40 },
+    3: { name: "Hard",   cpuSpeed: 6.4, aimError: 14, reactX: 0.20 },
+  };
+  const COLORS = {};
+  const css = getComputedStyle(document.documentElement);
+  for (const k of ["court", "line", "ink", "muted", "player", "cpu", "ball"]) {
+    COLORS[k] = css.getPropertyValue("--" + k).trim();
+  }
+  const FONT_DISPLAY = css.getPropertyValue("--font-display").trim();
+  const $ = (id) => document.getElementById(id);
+
+  // ---------- State ----------
+  const canvas = $("game");
+  const ctx = canvas.getContext("2d");
+
+  // `player` is always the left paddle and `cpu` the right one. In 2-player and
+  // online modes the right paddle is driven by a person instead of the AI.
+  const player = { x: PADDLE_MARGIN, y: H / 2 - PADDLE_H / 2, score: 0, targetY: null };
+  const cpu    = { x: W - PADDLE_MARGIN - PADDLE_W, y: H / 2 - PADDLE_H / 2, score: 0, targetY: null, aimOffset: 0 };
+  const ball   = { x: W / 2, y: H / 2, vx: 0, vy: 0, speed: BALL_START_SPEED, trail: [] };
+  const keys = { w: false, s: false, up: false, down: false };
+  let mode = "cpu";        // cpu | local | online
+  let state = "ready";     // ready | playing | paused | over
+  let level = 2;
+  let serveTimer = 0;      // > 0 while waiting to serve after a point
+  let flash = 0;           // brief court flash after a point
+  const counters = { hits: 0, walls: 0 };   // sent online so the guest hears the same beeps
+
+  // Online state. The host runs the real game; the guest sends its paddle
+  // position and draws what the host reports.
+  const net = {
+    role: null,            // null | "host" | "guest"
+    connected: false,
+    transport: null,       // { send(obj), close() }
+    lastSent: 0,
+    remote: null,          // latest message from the other side
+    remoteAt: 0,
+    seenGid: null, seenPause: 0, seenRestart: 0,  // host: which guest, and its requests already handled
+    gid: "",                             // guest: random id so the host can tell a new guest apart
+    pauseReq: 0, restartReq: 0,          // guest: requests sent to the host
+    lastEv: null,                        // guest: host sound counters already played
+  };
+
+  // ---------- Sound (WebAudio beeps) ----------
+  let audio = null;
+  function initAudio() {
+    if (!audio) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      audio = new AC();
+    }
+    if (audio.state === "suspended") audio.resume();
+  }
+  function beep(freq, duration, type = "square", volume = 0.08) {
+    if (!audio || audio.state !== "running") return;
+    const t = audio.currentTime;
+    const osc = audio.createOscillator();
+    const gain = audio.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, t);
+    gain.gain.setValueAtTime(volume, t);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + duration);
+    osc.connect(gain).connect(audio.destination);
+    osc.start(t);
+    osc.stop(t + duration + 0.02);
+  }
+  const sfx = {
+    paddle: () => beep(520, 0.07),
+    wall:   () => beep(300, 0.05, "square", 0.05),
+    score:  (good) => {
+      beep(good ? 660 : 220, 0.12, "triangle", 0.12);
+      setTimeout(() => beep(good ? 880 : 160, 0.18, "triangle", 0.12), 110);
+    },
+  };
+
+  // ---------- Who is who ----------
+  const isGuest = () => mode === "online" && net.role === "guest";
+  // Which paddle does this screen's keyboard and mouse move? "both" only in local 2-player.
+  function mySide() {
+    if (mode === "local") return "both";
+    if (isGuest()) return "right";
+    return "left";
+  }
+
+  // ---------- Game flow ----------
+  function resetBall(direction) {
+    ball.x = W / 2;
+    ball.y = H / 2;
+    ball.speed = BALL_START_SPEED;
+    const angle = (Math.random() * 2 - 1) * (Math.PI / 6);
+    ball.vx = Math.cos(angle) * ball.speed * direction;
+    ball.vy = Math.sin(angle) * ball.speed;
+    ball.trail.length = 0;
+    cpu.aimOffset = (Math.random() * 2 - 1) * DIFFICULTY[level].aimError;
+  }
+
+  function restart() {
+    if (isGuest()) { net.restartReq++; return; }   // ask the host instead
+    player.score = 0;
+    cpu.score = 0;
+    player.y = cpu.y = H / 2 - PADDLE_H / 2;
+    resetBall(Math.random() < 0.5 ? -1 : 1);
+    serveTimer = 0;
+    flash = 0;
+    state = "ready";
+    syncUI();
+  }
+
+  function toggleStart() {
+    initAudio();
+    if (isGuest()) { net.pauseReq++; return; }      // ask the host instead
+    if (mode === "online" && !net.connected) return; // nobody to play yet
+    if (state === "ready") state = "playing";
+    else if (state === "playing") state = "paused";
+    else if (state === "paused") state = "playing";
+    else if (state === "over") { restart(); state = "playing"; }
+    syncUI();
+  }
+
+  function setLevel(n) {
+    level = n;
+    cpu.aimOffset = (Math.random() * 2 - 1) * DIFFICULTY[level].aimError;
+    syncUI();
+  }
+
+  function setMode(m) {
+    if (m === mode) return;
+    if (mode === "online") netLeave();
+    mode = m;
+    player.targetY = cpu.targetY = null;
+    restart();
+    if (m === "online") showOnlineChoice();
+    syncUI();
+  }
+
+  function pointScored(byLeft) {
+    if (byLeft) player.score++; else cpu.score++;
+    // In vs-CPU and online-host games this screen is the left player.
+    sfx.score(mode === "local" ? true : byLeft);
+    flash = 1;
+    if (player.score >= WIN_SCORE || cpu.score >= WIN_SCORE) {
+      state = "over";
+      ball.vx = ball.vy = 0;
+      syncUI();
+      return;
+    }
+    resetBall(byLeft ? 1 : -1);   // serve toward whoever just lost the point
+    serveTimer = SERVE_DELAY;
+  }
+
+  // ---------- Update (logic) ----------
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+  // Move a paddle with keys (up/down booleans), or ease it toward the pointer.
+  function movePaddle(p, up, down, f) {
+    if (up || down) {
+      p.targetY = null;   // keyboard takes over from mouse/touch
+      p.y += (down - up) * PLAYER_SPEED * f;
+    } else if (p.targetY !== null) {
+      const goal = p.targetY - PADDLE_H / 2;
+      p.y += (goal - p.y) * Math.min(1, 0.35 * f);
+    }
+    p.y = clamp(p.y, 0, H - PADDLE_H);
+  }
+
+  function moveCpu(f) {
+    const d = DIFFICULTY[level];
+    let goal;
+    // React only when the ball is heading this way and has crossed the reaction line.
+    if (ball.vx > 0 && ball.x > W * d.reactX) {
+      goal = ball.y + cpu.aimOffset;
+    } else {
+      goal = H / 2;   // drift back to the middle
+    }
+    const center = cpu.y + PADDLE_H / 2;
+    const diff = goal - center;
+    const step = d.cpuSpeed * f;
+    if (Math.abs(diff) > 4) cpu.y += clamp(diff, -step, step);
+    cpu.y = clamp(cpu.y, 0, H - PADDLE_H);
+  }
+
+  function hitPaddle(p, dir) {
+    // Where did the ball hit? -1 = top edge, 0 = center, +1 = bottom edge.
+    const rel = clamp((ball.y - (p.y + PADDLE_H / 2)) / (PADDLE_H / 2 + BALL_R), -1, 1);
+    const angle = rel * MAX_BOUNCE_ANGLE;
+    ball.speed = Math.min(ball.speed + BALL_SPEEDUP, BALL_MAX_SPEED);
+    ball.vx = Math.cos(angle) * ball.speed * dir;
+    ball.vy = Math.sin(angle) * ball.speed;
+    counters.hits++;
+    sfx.paddle();
+    if (dir < 0) cpu.aimOffset = (Math.random() * 2 - 1) * DIFFICULTY[level].aimError;
+  }
+
+  function moveBall(f) {
+    // Small sub-steps so a fast ball can never skip through a paddle.
+    const steps = Math.ceil(ball.speed * f / 4);
+    const sf = f / steps;
+    for (let i = 0; i < steps; i++) {
+      ball.x += ball.vx * sf;
+      ball.y += ball.vy * sf;
+
+      if (ball.y - BALL_R < 0 && ball.vy < 0) { ball.y = BALL_R; ball.vy = -ball.vy; counters.walls++; sfx.wall(); }
+      if (ball.y + BALL_R > H && ball.vy > 0) { ball.y = H - BALL_R; ball.vy = -ball.vy; counters.walls++; sfx.wall(); }
+
+      // Left paddle
+      if (ball.vx < 0 &&
+          ball.x - BALL_R <= player.x + PADDLE_W && ball.x - BALL_R >= player.x - 6 &&
+          ball.y + BALL_R >= player.y && ball.y - BALL_R <= player.y + PADDLE_H) {
+        ball.x = player.x + PADDLE_W + BALL_R;
+        hitPaddle(player, 1);
+      }
+      // Right paddle
+      if (ball.vx > 0 &&
+          ball.x + BALL_R >= cpu.x && ball.x + BALL_R <= cpu.x + PADDLE_W + 6 &&
+          ball.y + BALL_R >= cpu.y && ball.y - BALL_R <= cpu.y + PADDLE_H) {
+        ball.x = cpu.x - BALL_R;
+        hitPaddle(cpu, -1);
+      }
+
+      if (ball.x + BALL_R < 0) { pointScored(false); return; }
+      if (ball.x - BALL_R > W) { pointScored(true); return; }
+    }
+    pushTrail();
+  }
+
+  function pushTrail() {
+    ball.trail.push({ x: ball.x, y: ball.y });
+    if (ball.trail.length > 10) ball.trail.shift();
+  }
+
+  function update(dt) {
+    const f = dt * 60;   // 1.0 at exactly 60 fps
+    flash = Math.max(0, flash - dt * 2.5);
+    if (isGuest()) { guestUpdate(f); return; }
+    if (state !== "playing") return;
+
+    if (mode === "local") {
+      movePaddle(player, keys.w, keys.s, f);
+      movePaddle(cpu, keys.up, keys.down, f);
+    } else {
+      movePaddle(player, keys.w || keys.up, keys.s || keys.down, f);
+      if (mode === "cpu") moveCpu(f);
+      else if (net.remote) cpu.y += (num(net.remote.py, 0, H - PADDLE_H, cpu.y) - cpu.y) * Math.min(1, 0.5 * f);
+    }
+    if (serveTimer > 0) { serveTimer -= dt; return; }
+    moveBall(f);
+  }
+
+  // Guest: move our own (right) paddle and show the host's paddle and ball.
+  function guestUpdate(f) {
+    const r = net.remote;
+    if (state === "playing") movePaddle(cpu, keys.w || keys.up, keys.s || keys.down, f);
+    if (!r) return;
+    player.y += (num(r.py, 0, H - PADDLE_H, player.y) - player.y) * Math.min(1, 0.5 * f);
+    // Predict where the ball is now from the host's last report, bouncing off the walls.
+    const moving = state === "playing" && !r.sv;
+    const ahead = moving ? Math.min((performance.now() - net.remoteAt) / 1000, 0.15) * 60 : 0;
+    ball.x = num(r.bx, -50, W + 50, W / 2) + num(r.bvx, -20, 20, 0) * ahead;
+    let y = num(r.by, 0, H, H / 2) + num(r.bvy, -20, 20, 0) * ahead;
+    if (y < BALL_R) y = 2 * BALL_R - y;
+    if (y > H - BALL_R) y = 2 * (H - BALL_R) - y;
+    ball.y = y;
+    if (moving) pushTrail(); else ball.trail.length = 0;
+  }
+
+  // ---------- Online: messages ----------
+  // Everything from the other player is untrusted: numbers are checked and clamped.
+  function num(v, lo, hi, fallback) {
+    const n = Number(v);
+    return Number.isFinite(n) ? clamp(n, lo, hi) : fallback;
+  }
+
+  function netSend(now) {
+    if (!net.transport || now - net.lastSent < NET_SEND_INTERVAL) return;
+    net.lastSent = now;
+    if (net.role === "host") {
+      net.transport.send({
+        r: "h", st: state, py: Math.round(player.y),
+        bx: Math.round(ball.x), by: Math.round(ball.y),
+        bvx: +ball.vx.toFixed(3), bvy: +ball.vy.toFixed(3), sv: serveTimer > 0,
+        s: [player.score, cpu.score], ev: [counters.hits, counters.walls],
+      });
+    } else {
+      net.transport.send({ r: "g", gid: net.gid, py: Math.round(cpu.y), pr: net.pauseReq, rr: net.restartReq });
+    }
+  }
+
+  function onRemote(msg) {
+    if (!msg || typeof msg !== "object") return;
+    net.remote = msg;
+    net.remoteAt = performance.now();
+    if (net.role === "host") {
+      const pr = num(msg.pr, 0, 1e9, 0), rr = num(msg.rr, 0, 1e9, 0);
+      if (msg.gid !== net.seenGid) { net.seenGid = msg.gid; net.seenPause = 0; net.seenRestart = 0; }
+      if (rr > net.seenRestart) { net.seenRestart = rr; restart(); }
+      if (pr > net.seenPause) { net.seenPause = pr; toggleStart(); }
+      return;
+    }
+    // Guest: copy the host's game state and replay its sounds.
+    const st = ["ready", "playing", "paused", "over"].includes(msg.st) ? msg.st : state;
+    if (st !== state) { state = st; syncUI(); }
+    const s = Array.isArray(msg.s) ? msg.s : [0, 0];
+    const left = num(s[0], 0, WIN_SCORE, 0), right = num(s[1], 0, WIN_SCORE, 0);
+    if (left + right > player.score + cpu.score) { sfx.score(right > cpu.score); flash = 1; }
+    player.score = left; cpu.score = right;
+    const ev = Array.isArray(msg.ev) ? msg.ev.map((v) => num(v, 0, 1e9, 0)) : [0, 0];
+    if (net.lastEv) {
+      if (ev[0] > net.lastEv[0]) sfx.paddle();
+      if (ev[1] > net.lastEv[1]) sfx.wall();
+    }
+    net.lastEv = ev;
+  }
+
+  function onNetConnected() {
+    if (net.connected) return;
+    net.connected = true;
+    net.lastEv = null;
+    setNetStatus(net.role === "host"
+      ? "Connected. You are blue, on the left. Press Space to serve."
+      : "Connected. You are red, on the right. The host serves; your Space asks to start or pause.");
+    $("rtc").hidden = $("room-join").hidden = true;
+    if (net.role === "host") restart();
+    syncUI();
+  }
+
+  function onNetDisconnected() {
+    if (!net.connected) return;
+    net.connected = false;
+    net.remote = null;
+    if (state === "playing" && !isGuest()) state = "paused";
+    setNetStatus(rooms || window.Peer ? "Your opponent left. They can rejoin with the same invite link."
+                       : "Your opponent disconnected. Leave and start a new online game to play again.");
+    syncUI();
+  }
+
+  function netLeave() {
+    if (net.transport) { try { net.transport.close(); } catch (e) { /* already closed */ } }
+    Object.assign(net, { role: null, connected: false, transport: null, remote: null,
+                         seenGid: null, seenPause: 0, seenRestart: 0, gid: "", pauseReq: 0, restartReq: 0, lastEv: null });
+  }
+
+  function setNetStatus(text) { $("net-status").textContent = text; }
+
+  // ---------- Online: transport ----------
+  // Opened inside Claude, the page meets the other player in a shared room by a
+  // short code. Anywhere else (the public website or a saved copy) it uses
+  // PeerJS's free matchmaking server to find the other player, then connects the
+  // two browsers directly. If that server can't be reached, players can still
+  // swap connection codes by copy and paste.
+  let rooms = null;
+  const roomsReady = (window.claude && typeof window.claude.use === "function")
+    ? window.claude.use("room").then((r) => { rooms = r; return r; }).catch(() => null)
+    : Promise.resolve(null);
+
+  function randomCode(len = 4) {
+    const chars = "abcdefghjkmnpqrstuvwxyz23456789";
+    let c = "";
+    for (let i = 0; i < len; i++) c += chars[Math.floor(Math.random() * chars.length)];
+    return c;
+  }
+
+  // PeerJS is only loaded when someone plays online outside Claude.
+  const PEERJS_URLS = [
+    "https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js",
+    "https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js",
+  ];
+  const PEER_PREFIX = "jaipong7-";   // keeps our game codes apart from other PeerJS apps
+  let peerLoad = null;
+  function loadPeerJs() {
+    if (window.Peer) return Promise.resolve(true);
+    if (!peerLoad) {
+      peerLoad = PEERJS_URLS.reduce((prev, src) => prev.then((ok) => ok || new Promise((resolve) => {
+        const el = document.createElement("script");
+        el.src = src;
+        el.onload = () => resolve(!!window.Peer);
+        el.onerror = () => { el.remove(); resolve(false); };
+        document.head.appendChild(el);
+      })), Promise.resolve(false));
+    }
+    return peerLoad;
+  }
+
+  function peerWire(peer, conn) {
+    net.transport = {
+      send: (o) => { if (conn.open) conn.send(o); },
+      close: () => { try { conn.close(); } catch (e) { /* ignore */ } peer.destroy(); },
+    };
+    conn.on("open", onNetConnected);
+    conn.on("data", onRemote);
+    conn.on("close", onNetDisconnected);
+    conn.on("error", onNetDisconnected);
+  }
+
+  // Resolves true once this page is registered as the host, false if it can't be.
+  function peerHost(code) {
+    net.role = "host";
+    syncUI();
+    return new Promise((resolve) => {
+      const peer = new window.Peer(PEER_PREFIX + code, { config: { iceServers: STUN_SERVERS } });
+      net.transport = { send: () => {}, close: () => peer.destroy() };
+      peer.on("open", () => resolve(true));
+      peer.on("connection", (conn) => {
+        if (net.connected) { conn.on("open", () => conn.close()); return; }   // one opponent at a time
+        peerWire(peer, conn);
+      });
+      peer.on("error", (err) => {
+        if (!net.connected && (err.type === "network" || err.type === "server-error" || err.type === "unavailable-id" || err.type === "browser-incompatible")) {
+          peer.destroy();
+          resolve(false);
+        }
+      });
+    });
+  }
+
+  function peerJoin(code) {
+    net.role = "guest";
+    net.gid = randomCode(8);
+    syncUI();
+    const peer = new window.Peer({ config: { iceServers: STUN_SERVERS } });
+    net.transport = { send: () => {}, close: () => peer.destroy() };
+    let tries = 0;
+    const attempt = () => {
+      if (net.role !== "guest" || net.connected) return;
+      tries++;
+      peerWire(peer, peer.connect(PEER_PREFIX + code, { reliable: false, serialization: "json" }));
+    };
+    peer.on("open", attempt);
+    peer.on("error", (err) => {
+      if (err.type === "peer-unavailable") {
+        setNetStatus("No game found for " + code.toUpperCase() + " yet. Check the code; still looking.");
+        if (tries < 20) setTimeout(attempt, 3000);
+      } else if (!net.connected) {
+        setNetStatus("Couldn't reach the matchmaking server. Check your internet connection, then leave and try again.");
+      }
+    });
+  }
+
+  async function roomConnect(role, code) {
+    net.role = role;
+    net.gid = randomCode() + randomCode();
+    syncUI();
+    let r;
+    try {
+      r = await rooms.join("pong-" + code);
+    } catch (e) {
+      setNetStatus("Couldn't open the game room. Try again in a moment.");
+      net.role = null; syncUI();
+      return false;
+    }
+    if (mode !== "online" || net.role !== role) { r.leave().catch(() => {}); return false; }
+    const want = role === "host" ? "g" : "h";
+    let lastPresence = null;
+    const offPeers = r.onPeers((change) => {
+      const opp = change.peers.find((p) => !p.sameTab && p.presence && p.presence.r === want);
+      if (!opp) { onNetDisconnected(); return; }
+      onNetConnected();
+      if (opp.presence !== lastPresence) { lastPresence = opp.presence; onRemote(opp.presence); }
+    }, () => setNetStatus("Lost the connection to the game room."));
+    net.transport = {
+      send: (o) => { r.presence(o).catch(() => {}); },
+      close: () => { offPeers(); r.leave().catch(() => {}); },
+    };
+    return true;
+  }
+
+  function rtcPeer() {
+    const pc = new RTCPeerConnection({ iceServers: STUN_SERVERS });
+    pc.addEventListener("connectionstatechange", () => {
+      if (["failed", "disconnected", "closed"].includes(pc.connectionState)) onNetDisconnected();
+      if (pc.connectionState === "failed" && !net.connected) {
+        setNetStatus("Couldn't connect. Some networks block direct connections; try both players on the same Wi-Fi.");
+      }
+    });
+    net.transport = { send: () => {}, close: () => pc.close() };
+    return pc;
+  }
+
+  function rtcWire(pc, dc) {
+    net.transport = {
+      send: (o) => { if (dc.readyState === "open") dc.send(JSON.stringify(o)); },
+      close: () => { try { dc.close(); } catch (e) { /* ignore */ } pc.close(); },
+    };
+    dc.addEventListener("open", onNetConnected);
+    dc.addEventListener("close", onNetDisconnected);
+    dc.addEventListener("message", (e) => { try { onRemote(JSON.parse(e.data)); } catch (err) { /* ignore bad data */ } });
+  }
+
+  function iceGathered(pc) {
+    return new Promise((resolve) => {
+      if (pc.iceGatheringState === "complete") return resolve();
+      const t = setTimeout(resolve, 4000);
+      pc.addEventListener("icegatheringstatechange", () => {
+        if (pc.iceGatheringState === "complete") { clearTimeout(t); resolve(); }
+      });
+    });
+  }
+  const encodeDesc = (d) => "PONG:" + btoa(JSON.stringify({ type: d.type, sdp: d.sdp }));
+  function decodeDesc(text) {
+    text = text.trim();
+    if (!text.startsWith("PONG:")) throw new Error("bad code");
+    const d = JSON.parse(atob(text.slice(5)));
+    if (!d || typeof d.sdp !== "string") throw new Error("bad code");
+    return d;
+  }
+
+  async function rtcHost() {
+    net.role = "host";
+    syncUI();
+    const pc = rtcPeer();
+    rtcWire(pc, pc.createDataChannel("pong", { ordered: false, maxRetransmits: 0 }));
+    showRtc("1. Send this code to your friend", "2. Paste your friend's reply code here", "Connect", true);
+    setNetStatus("Creating your code…");
+    await pc.setLocalDescription(await pc.createOffer());
+    await iceGathered(pc);
+    $("rtc-out").value = encodeDesc(pc.localDescription);
+    setNetStatus("Send the code above, then paste your friend's reply below.");
+    $("rtc-in-go").onclick = async () => {
+      try {
+        await pc.setRemoteDescription(decodeDesc($("rtc-in").value));
+        setNetStatus("Connecting…");
+      } catch (e) {
+        setNetStatus("That doesn't look like a reply code from this game. Copy the whole code and try again.");
+      }
+    };
+  }
+
+  function rtcJoin() {
+    net.role = "guest";
+    net.gid = randomCode() + randomCode();
+    syncUI();
+    const pc = rtcPeer();
+    pc.addEventListener("datachannel", (e) => rtcWire(pc, e.channel));
+    showRtc("2. Send this reply code back to the host", "1. Paste the host's code here", "Create reply code", false);
+    $("rtc-in-go").onclick = async () => {
+      try {
+        await pc.setRemoteDescription(decodeDesc($("rtc-in").value));
+      } catch (e) {
+        setNetStatus("That doesn't look like a host code from this game. Copy the whole code and try again.");
+        return;
+      }
+      setNetStatus("Creating your reply code…");
+      await pc.setLocalDescription(await pc.createAnswer());
+      await iceGathered(pc);
+      $("rtc-out").value = encodeDesc(pc.localDescription);
+      setNetStatus("Send the reply code to the host. The game connects once they paste it.");
+    };
+    setNetStatus("Paste the code the host sent you.");
+  }
+
+  // ---------- Online: panel ----------
+  function showOnlineChoice() {
+    for (const id of ["room-host", "room-join", "rtc"]) $(id).hidden = true;
+    $("net-choose").hidden = false;
+    $("rtc-in").value = $("rtc-out").value = "";
+    setNetStatus("Host a game and share the code, or join a friend's game.");
+  }
+
+  // The host's outgoing code comes first; the guest pastes first.
+  function showRtc(outLabel, inLabel, goLabel, outFirst) {
+    $("net-choose").hidden = true;
+    $("rtc").hidden = false;
+    $("rtc").style.flexDirection = outFirst ? "column-reverse" : "column";
+    $("rtc-out-label").textContent = outLabel;
+    $("rtc-in-label").textContent = inLabel;
+    $("rtc-in-go").textContent = goLabel;
+  }
+
+  async function startOnline(asHost) {
+    $("net-choose").hidden = true;
+    setNetStatus("Getting ready…");
+    await roomsReady;
+    if (mode !== "online") return;
+    const usePeer = !rooms && window.RTCPeerConnection && await loadPeerJs();
+    if (mode !== "online") return;
+    if (rooms || usePeer) {
+      if (asHost) {
+        const code = randomCode(rooms ? 4 : 6);
+        const base = rooms ? SHARE_URL : location.href.split("#")[0];
+        $("room-code").textContent = code.toUpperCase();
+        $("room-link").textContent = base + "#pong-" + code;
+        const ok = rooms ? await roomConnect("host", code) : await peerHost(code);
+        if (ok) {
+          $("room-host").hidden = false;
+          setNetStatus("Send your friend the invite link. Opening it joins this game. They can also type the code under Join.");
+        } else if (!rooms) {
+          netLeave();
+          setNetStatus("Couldn't reach the matchmaking server, so you'll swap codes by hand instead.");
+          await rtcHost();
+        }
+      } else {
+        $("room-join").hidden = false;
+        $("room-code-input").focus();
+        setNetStatus("Type the code the host shared.");
+      }
+    } else if (window.RTCPeerConnection) {
+      try { asHost ? await rtcHost() : rtcJoin(); }
+      catch (e) { setNetStatus("Online play couldn't start here. Save the file and open it directly in Chrome, Edge, Firefox or Safari."); }
+    } else {
+      setNetStatus("Online play isn't available in this browser.");
+    }
+  }
+
+  async function joinRoomByCode(fromLink) {
+    const code = (typeof fromLink === "string" ? fromLink : $("room-code-input").value).trim().toLowerCase();
+    if (!/^[a-z0-9]{4,6}$/.test(code)) { setNetStatus("Check the code. It's 4 to 6 letters or numbers."); return; }
+    $("room-join").hidden = true;
+    setNetStatus("Looking for game " + code.toUpperCase() + "…");
+    if (!rooms) { peerJoin(code); return; }
+    if (!(await roomConnect("guest", code))) return;
+    setTimeout(() => {
+      if (net.role === "guest" && !net.connected) setNetStatus("No host found for " + code.toUpperCase() + " yet. Check the code; still looking.");
+    }, 5000);
+  }
+
+  function copyText(text, btn, fallbackEl) {
+    btn.dataset.label = btn.dataset.label || btn.textContent;
+    const done = () => { btn.textContent = "Copied"; setTimeout(() => { btn.textContent = btn.dataset.label; }, 1500); };
+    const fallback = () => { if (fallbackEl) fallbackEl.select(); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback);
+    else fallback();
+  }
+
+  // ---------- Draw (rendering) ----------
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function drawCourt() {
+    ctx.fillStyle = COLORS.court;
+    ctx.fillRect(0, 0, W, H);
+    if (flash > 0) {
+      ctx.globalAlpha = flash * 0.12;
+      ctx.fillStyle = COLORS.ink;
+      ctx.fillRect(0, 0, W, H);
+      ctx.globalAlpha = 1;
+    }
+    ctx.strokeStyle = COLORS.line;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([10, 12]);
+    ctx.beginPath();
+    ctx.moveTo(W / 2, 12);
+    ctx.lineTo(W / 2, H - 12);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  function sideNames() {
+    if (mode === "local") return ["PLAYER 1", "PLAYER 2"];
+    if (mode === "online") return isGuest() ? ["OPPONENT", "YOU"] : ["YOU", "OPPONENT"];
+    return ["YOU", "CPU · " + DIFFICULTY[level].name.toUpperCase()];
+  }
+
+  function drawScores() {
+    const names = sideNames();
+    ctx.font = `700 64px ${FONT_DISPLAY}`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = COLORS.player;
+    ctx.fillText(player.score, W / 2 - 80, 24);
+    ctx.fillStyle = COLORS.cpu;
+    ctx.fillText(cpu.score, W / 2 + 80, 24);
+    ctx.font = `500 13px ${FONT_DISPLAY}`;
+    ctx.fillStyle = COLORS.muted;
+    ctx.fillText(names[0], W / 2 - 80, 94);
+    ctx.fillText(names[1], W / 2 + 80, 94);
+  }
+
+  function drawPaddle(p, color) {
+    ctx.fillStyle = color;
+    roundRect(p.x, p.y, PADDLE_W, PADDLE_H, 4);
+    ctx.fill();
+  }
+
+  function drawBall() {
+    for (let i = 0; i < ball.trail.length; i++) {
+      const t = ball.trail[i];
+      ctx.globalAlpha = (i + 1) / ball.trail.length * 0.25;
+      ctx.fillStyle = COLORS.ball;
+      ctx.beginPath();
+      ctx.arc(t.x, t.y, BALL_R * (0.4 + 0.6 * (i + 1) / ball.trail.length), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    const serving = isGuest() ? !!(net.remote && net.remote.sv) : serveTimer > 0;
+    ctx.globalAlpha = serving ? 0.5 + 0.5 * Math.sin(performance.now() / 80) : 1;
+    ctx.fillStyle = COLORS.ball;
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, BALL_R, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  function drawOverlay(title, subtitle, color) {
+    ctx.fillStyle = "rgba(8, 12, 22, 0.72)";
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = color;
+    ctx.font = `700 52px ${FONT_DISPLAY}`;
+    ctx.fillText(title, W / 2, H / 2 - 18);
+    ctx.fillStyle = COLORS.ink;
+    ctx.font = `500 18px ${FONT_DISPLAY}`;
+    ctx.fillText(subtitle, W / 2, H / 2 + 34);
+  }
+
+  function readyText() {
+    if (mode === "local") return "Left: W/S · Right: ↑/↓ · Space to serve";
+    if (mode === "online") {
+      if (!net.role) return "Host or join a game below the court";
+      if (!net.connected) return net.role === "host" ? "Waiting for your friend to join" : "Connecting to the host…";
+      return net.role === "host" ? "Opponent joined · Space to serve" : "Waiting for the host to serve";
+    }
+    return "Press Space or tap to serve · first to 7";
+  }
+
+  function winnerText() {
+    const leftWon = player.score > cpu.score;
+    const color = leftWon ? COLORS.player : COLORS.cpu;
+    if (mode === "local") return [leftWon ? "PLAYER 1 WINS" : "PLAYER 2 WINS", color];
+    const iWon = isGuest() ? !leftWon : leftWon;
+    return [iWon ? "YOU WIN" : mode === "online" ? "OPPONENT WINS" : "CPU WINS", color];
+  }
+
+  function draw() {
+    drawCourt();
+    drawScores();
+    drawPaddle(player, COLORS.player);
+    drawPaddle(cpu, COLORS.cpu);
+    if (state !== "over") drawBall();
+
+    if (state === "ready") {
+      drawOverlay(mode === "local" ? "2 PLAYERS" : mode === "online" ? "ONLINE" : "PONG", readyText(), COLORS.ball);
+    } else if (state === "paused") {
+      const why = mode === "online" && !net.connected ? "Waiting for your opponent" : "Press Space or tap to resume";
+      drawOverlay("PAUSED", why, COLORS.ink);
+    } else if (state === "over") {
+      const [title, color] = winnerText();
+      drawOverlay(title, `${player.score} – ${cpu.score} · Space to play again`, color);
+    }
+  }
+
+  // ---------- Loop ----------
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min((now - last) / 1000, 1 / 20);   // cap so a tab switch can't teleport the ball
+    last = now;
+    update(dt);
+    if (mode === "online") netSend(now);
+    draw();
+    requestAnimationFrame(frame);
+  }
+
+  // ---------- Input ----------
+  const isTyping = (e) => e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA");
+  const KEYMAP = { KeyW: "w", KeyS: "s", ArrowUp: "up", ArrowDown: "down" };
+  window.addEventListener("keydown", (e) => {
+    if (isTyping(e)) return;
+    if (KEYMAP[e.code]) { keys[KEYMAP[e.code]] = true; e.preventDefault(); }
+    else if (e.code === "Space") { e.preventDefault(); if (!e.repeat) toggleStart(); }
+    else if (e.code === "KeyR") { restart(); }
+    else if (mode === "cpu" && (e.code === "Digit1" || e.code === "Numpad1")) setLevel(1);
+    else if (mode === "cpu" && (e.code === "Digit2" || e.code === "Numpad2")) setLevel(2);
+    else if (mode === "cpu" && (e.code === "Digit3" || e.code === "Numpad3")) setLevel(3);
+  });
+  window.addEventListener("keyup", (e) => {
+    if (KEYMAP[e.code]) keys[KEYMAP[e.code]] = false;
+  });
+  window.addEventListener("blur", () => {
+    keys.w = keys.s = keys.up = keys.down = false;
+    if (state === "playing" && !isGuest()) { state = "paused"; syncUI(); }
+  });
+
+  // Mouse and touch: in 2-player mode each half of the court moves its own
+  // paddle, so two people can share a tablet. Otherwise it moves your paddle.
+  function pointerAim(e) {
+    const r = canvas.getBoundingClientRect();
+    const x = (e.clientX - r.left) * (W / r.width);
+    const y = (e.clientY - r.top) * (H / r.height);
+    const side = mySide() === "both" ? (x < W / 2 ? "left" : "right") : mySide();
+    (side === "left" ? player : cpu).targetY = y;
+  }
+  canvas.addEventListener("pointermove", pointerAim);
+  canvas.addEventListener("pointerdown", (e) => {
+    pointerAim(e);
+    // A tap starts or resumes play; it never pauses, so dragging to move is safe.
+    if (state !== "playing") toggleStart();
+    else initAudio();
+  });
+
+  function onClick(id, fn) {
+    $(id).addEventListener("click", (e) => { const btn = e.currentTarget; fn(btn); btn.blur(); });
+  }
+  onClick("btn-start", toggleStart);
+  onClick("btn-restart", restart);
+  for (const n of [1, 2, 3]) onClick("btn-d" + n, () => setLevel(n));
+  for (const m of ["cpu", "local", "online"]) onClick("mode-" + m, () => { initAudio(); setMode(m); });
+  onClick("net-host", () => startOnline(true));
+  onClick("net-join", () => startOnline(false));
+  onClick("room-join-go", joinRoomByCode);
+  $("room-code-input").addEventListener("keydown", (e) => { if (e.key === "Enter") joinRoomByCode(); });
+  onClick("room-copy", (btn) => copyText($("room-link").textContent, btn, null));
+  onClick("rtc-copy", (btn) => copyText($("rtc-out").value, btn, $("rtc-out")));
+  onClick("net-leave", () => { netLeave(); restart(); showOnlineChoice(); syncUI(); });
+
+  function syncUI() {
+    const label = state === "playing" ? "Pause" : state === "paused" ? "Resume" : state === "over" ? "Play again" : "Start";
+    $("btn-start").firstChild.textContent = label;
+    for (const n of [1, 2, 3]) $("btn-d" + n).setAttribute("aria-pressed", String(n === level));
+    for (const m of ["cpu", "local", "online"]) $("mode-" + m).setAttribute("aria-pressed", String(m === mode));
+    $("difficulty").hidden = mode !== "cpu";
+    $("online").hidden = mode !== "online";
+    $("net-leave").hidden = !net.role;
+    $("help").textContent =
+      mode === "local" ? "Player 1 (left) uses W/S and Player 2 (right) uses the arrow keys. On a touch screen, each player drags on their own half of the court. First to 7 wins." :
+      mode === "online" ? "Move with W/S, the arrow keys, the mouse, or drag on the court. The host is blue on the left and the friend who joins is red on the right." :
+      "Move with W/S, the arrow keys, the mouse, or drag on the court. First to 7 wins.";
+  }
+
+  // ---------- Crisp rendering on high-DPI screens ----------
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener("resize", resize);
+
+  // Opened from an invite link (#pong-CODE): go straight into that online game.
+  async function joinFromLink() {
+    const m = /^#pong-([a-z0-9]{4,6})$/i.exec(location.hash);
+    if (!m || net.role) return;
+    setMode("online");
+    $("net-choose").hidden = true;
+    setNetStatus("Joining game " + m[1].toUpperCase() + "…");
+    await roomsReady;
+    if (!rooms && !(window.RTCPeerConnection && await loadPeerJs())) {
+      setNetStatus("Couldn't reach the matchmaking server to join this game. Check your internet connection and reload.");
+      $("net-choose").hidden = false;
+      return;
+    }
+    joinRoomByCode(m[1]);
+  }
+  window.addEventListener("hashchange", joinFromLink);
+
+  resize();
+  restart();
+  joinFromLink();
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(draw);
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
