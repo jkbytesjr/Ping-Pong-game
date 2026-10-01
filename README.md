@@ -3,7 +3,7 @@
 
 A browser Pong game in a single `index.html` file. It has no build step and nothing to install.
 
-**Play it:** https://YOUR-USERNAME.github.io/pong
+**Play it:** https://jkbytesjr.github.io/pong
 
 ## Game modes
 
